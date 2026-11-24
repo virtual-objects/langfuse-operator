@@ -21,18 +21,22 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	langfusev1alpha1 "github.com/virtual-objects/langfuse-operator/api/v1alpha1"
+	"github.com/virtual-objects/langfuse-operator/internal/langfuse/fake"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -45,7 +49,11 @@ var (
 	testEnv   *envtest.Environment
 	cfg       *rest.Config
 	k8sClient client.Client
+	lfServer  *fake.Server
 )
+
+// testResync keeps drift-correction tests fast.
+const testResync = 2 * time.Second
 
 func TestControllers(t *testing.T) {
 	RegisterFailHandler(Fail)
@@ -83,11 +91,34 @@ var _ = BeforeSuite(func() {
 	k8sClient, err = client.New(cfg, client.Options{Scheme: scheme.Scheme})
 	Expect(err).NotTo(HaveOccurred())
 	Expect(k8sClient).NotTo(BeNil())
+
+	By("starting a fake Langfuse and the controllers")
+	lfServer = fake.NewServer()
+	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
+		Scheme:  scheme.Scheme,
+		Metrics: metricsserver.Options{BindAddress: "0"},
+	})
+	Expect(err).NotTo(HaveOccurred())
+	resolver := &ConnectionResolver{SecretReader: mgr.GetAPIReader()}
+	Expect((&LangfuseConnectionReconciler{
+		Client: mgr.GetClient(), Resolver: resolver, ResyncPeriod: testResync,
+	}).SetupWithManager(mgr)).To(Succeed())
+	Expect((&LangfuseModelReconciler{
+		Client: mgr.GetClient(), Resolver: resolver, ResyncPeriod: testResync,
+		Recorder: mgr.GetEventRecorderFor("langfuse-operator"),
+	}).SetupWithManager(mgr)).To(Succeed())
+	go func() {
+		defer GinkgoRecover()
+		Expect(mgr.Start(ctx)).To(Succeed())
+	}()
 })
 
 var _ = AfterSuite(func() {
 	By("tearing down the test environment")
 	cancel()
+	if lfServer != nil {
+		lfServer.Close()
+	}
 	err := testEnv.Stop()
 	Expect(err).NotTo(HaveOccurred())
 })

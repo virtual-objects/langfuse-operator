@@ -1,0 +1,342 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.18.0
+  name: langfusemodels.langfuse.virtual-objects.github.io
+spec:
+  group: langfuse.virtual-objects.github.io
+  names:
+    categories:
+    - langfuse
+    kind: LangfuseModel
+    listKind: LangfuseModelList
+    plural: langfusemodels
+    shortNames:
+    - lfmodel
+    singular: langfusemodel
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.modelName
+      name: Model
+      type: string
+    - jsonPath: .spec.connectionRef.name
+      name: Connection
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].reason
+      name: Reason
+      priority: 1
+      type: string
+    - jsonPath: .status.modelID
+      name: Model ID
+      priority: 1
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: LangfuseModel is a custom model definition with pricing in a
+          Langfuse project.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: LangfuseModelSpec defines a custom model definition in one
+              Langfuse project.
+            properties:
+              connectionRef:
+                description: ConnectionRef names the LangfuseConnection (same namespace)
+                  for the target project.
+                properties:
+                  name:
+                    description: Name of the referenced object.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                required:
+                - name
+                type: object
+              deletionPolicy:
+                default: Delete
+                description: |-
+                  DeletionPolicy decides whether deleting this resource also deletes the
+                  model in Langfuse.
+                enum:
+                - Delete
+                - Orphan
+                type: string
+              matchPattern:
+                description: |-
+                  MatchPattern is a PostgreSQL regular expression matched against the
+                  model ID that generations report, e.g. (?i)^(anthropic\.)?claude-sonnet-4-6$.
+                maxLength: 1024
+                minLength: 1
+                type: string
+              modelName:
+                description: |-
+                  ModelName is the model name in Langfuse, unique within the project.
+                  A project model with the same name as a built-in Langfuse model overrides it.
+                maxLength: 255
+                minLength: 1
+                type: string
+              pricingTiers:
+                description: PricingTiers of the model. Usage types must be the same
+                  in every tier.
+                items:
+                  description: |-
+                    PricingTier is a set of prices that applies when its conditions match.
+                    Every model needs exactly one default tier (isDefault: true, priority 0, no conditions).
+                  properties:
+                    conditions:
+                      description: |-
+                        Conditions that select this tier. Must be empty for the default tier and
+                        non-empty for every other tier.
+                      items:
+                        description: |-
+                          PricingTierCondition selects a tier from the usage details of a generation,
+                          for example "input tokens greater than 200000".
+                        properties:
+                          caseSensitive:
+                            description: CaseSensitive controls regex matching of
+                              UsageDetailPattern.
+                            type: boolean
+                          operator:
+                            description: Operator used to compare the summed usage
+                              with Value.
+                            enum:
+                            - gt
+                            - gte
+                            - lt
+                            - lte
+                            - eq
+                            - neq
+                            type: string
+                          usageDetailPattern:
+                            description: UsageDetailPattern is a regex matched against
+                              usage detail keys, e.g. "input".
+                            maxLength: 200
+                            minLength: 1
+                            type: string
+                          value:
+                            description: Value is the threshold.
+                            format: int64
+                            minimum: 0
+                            type: integer
+                        required:
+                        - operator
+                        - usageDetailPattern
+                        - value
+                        type: object
+                      maxItems: 10
+                      type: array
+                      x-kubernetes-list-type: atomic
+                    isDefault:
+                      description: IsDefault marks the fallback tier. Exactly one
+                        tier must be the default.
+                      type: boolean
+                    name:
+                      description: Name of the tier, unique within the model.
+                      maxLength: 100
+                      minLength: 1
+                      type: string
+                    pricePerMillion:
+                      additionalProperties:
+                        description: Price is a non-negative decimal in USD, written
+                          as a string to avoid float rounding.
+                        maxLength: 40
+                        pattern: ^[0-9]+(\.[0-9]+)?$
+                        type: string
+                      description: |-
+                        PricePerMillion holds prices in USD per 1,000,000 units.
+                        Keys are either aliases, which expand to every usage-type name Langfuse and
+                        its SDKs report, or literal Langfuse usage types, which are used as-is:
+                          input      -> input, input_tokens
+                          output     -> output, output_tokens
+                          cacheRead  -> input_cache_read, cache_read_input_tokens
+                          cacheWrite -> input_cache_creation, cache_creation_input_tokens
+                          total      -> total
+                      maxProperties: 50
+                      type: object
+                    pricePerUnit:
+                      additionalProperties:
+                        description: Price is a non-negative decimal in USD, written
+                          as a string to avoid float rounding.
+                        maxLength: 40
+                        pattern: ^[0-9]+(\.[0-9]+)?$
+                        type: string
+                      description: |-
+                        PricePerUnit holds prices in USD per single unit, passed to Langfuse 1:1.
+                        Keys follow the same alias rules as PricePerMillion. A usage type set here
+                        overrides the same usage type derived from PricePerMillion.
+                      maxProperties: 50
+                      type: object
+                    priority:
+                      default: 0
+                      description: Priority orders tier evaluation (lower first).
+                        The default tier must use 0.
+                      format: int32
+                      maximum: 999
+                      minimum: 0
+                      type: integer
+                  required:
+                  - name
+                  type: object
+                  x-kubernetes-validations:
+                  - message: a pricing tier needs at least one price in pricePerMillion
+                      or pricePerUnit
+                    rule: (has(self.pricePerMillion) && size(self.pricePerMillion)
+                      > 0) || (has(self.pricePerUnit) && size(self.pricePerUnit) >
+                      0)
+                maxItems: 10
+                minItems: 1
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
+              tokenizerConfig:
+                description: 'TokenizerConfig is passed to the tokenizer, e.g. {"tokensPerMessage":
+                  3}.'
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+              tokenizerId:
+                description: TokenizerID lets Langfuse count tokens when a generation
+                  reports none.
+                enum:
+                - openai
+                - claude
+                type: string
+              unit:
+                default: TOKENS
+                description: Unit the prices are expressed in.
+                enum:
+                - TOKENS
+                - CHARACTERS
+                - MILLISECONDS
+                - SECONDS
+                - REQUESTS
+                - IMAGES
+                type: string
+            required:
+            - connectionRef
+            - matchPattern
+            - modelName
+            - pricingTiers
+            type: object
+            x-kubernetes-validations:
+            - message: 'exactly one pricing tier must have isDefault: true'
+              rule: self.pricingTiers.filter(t, has(t.isDefault) && t.isDefault).size()
+                == 1
+            - message: the default pricing tier must have priority 0 and no conditions
+              rule: self.pricingTiers.all(t, !(has(t.isDefault) && t.isDefault) ||
+                ((!has(t.priority) || t.priority == 0) && (!has(t.conditions) || size(t.conditions)
+                == 0)))
+            - message: every non-default pricing tier needs at least one condition
+              rule: self.pricingTiers.all(t, (has(t.isDefault) && t.isDefault) ||
+                (has(t.conditions) && size(t.conditions) > 0))
+            - message: pricing tier priorities must be unique
+              rule: 'self.pricingTiers.all(a, self.pricingTiers.exists_one(b, (has(b.priority)
+                ? b.priority : 0) == (has(a.priority) ? a.priority : 0)))'
+          status:
+            description: LangfuseModelStatus defines the observed state of LangfuseModel.
+            properties:
+              conditions:
+                description: Conditions describe the current state.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              modelID:
+                description: ModelID is the ID of the model in Langfuse.
+                type: string
+              observedGeneration:
+                description: ObservedGeneration is the last spec generation that was
+                  reconciled.
+                format: int64
+                type: integer
+              projectID:
+                description: ProjectID is the Langfuse project that holds the model.
+                type: string
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

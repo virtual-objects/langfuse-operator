@@ -18,46 +18,98 @@ package controller
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"time"
 
-	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/api/equality"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	langfusev1alpha1 "github.com/virtual-objects/langfuse-operator/api/v1alpha1"
+	"github.com/virtual-objects/langfuse-operator/internal/langfuse"
 )
 
-// LangfuseConnectionReconciler reconciles a LangfuseConnection object
+// LangfuseConnectionReconciler verifies that a connection's credentials work
+// and records which Langfuse project they belong to.
 type LangfuseConnectionReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Resolver     *ConnectionResolver
+	ResyncPeriod time.Duration
 }
 
-// +kubebuilder:rbac:groups=langfuse.virtual-objects.github.io,resources=langfuseconnections,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=langfuse.virtual-objects.github.io,resources=langfuseconnections,verbs=get;list;watch
 // +kubebuilder:rbac:groups=langfuse.virtual-objects.github.io,resources=langfuseconnections/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=langfuse.virtual-objects.github.io,resources=langfuseconnections/finalizers,verbs=update
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get
 
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
-// move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the LangfuseConnection object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.21.0/pkg/reconcile
+// Reconcile checks the connection against Langfuse.
 func (r *LangfuseConnectionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = logf.FromContext(ctx)
+	log := logf.FromContext(ctx)
 
-	// TODO(user): your logic here
+	var conn langfusev1alpha1.LangfuseConnection
+	if err := r.Get(ctx, req.NamespacedName, &conn); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+	orig := conn.DeepCopy()
 
-	return ctrl.Result{}, nil
+	result, reconcileErr := r.check(ctx, &conn)
+	conn.Status.ObservedGeneration = conn.Generation
+
+	if !equality.Semantic.DeepEqual(orig.Status, conn.Status) {
+		if err := r.Status().Patch(ctx, &conn, client.MergeFrom(orig)); err != nil {
+			return ctrl.Result{}, fmt.Errorf("update status: %w", err)
+		}
+	}
+	if reconcileErr != nil {
+		log.Error(reconcileErr, "connection check failed")
+	}
+	return result, reconcileErr
+}
+
+func (r *LangfuseConnectionReconciler) check(ctx context.Context, conn *langfusev1alpha1.LangfuseConnection) (ctrl.Result, error) {
+	lf, err := r.Resolver.Client(ctx, conn)
+	if err != nil {
+		var ce *connectionError
+		if errors.As(err, &ce) {
+			setReady(&conn.Status.Conditions, conn.Generation, false, ce.reason, ce.Error())
+			return ctrl.Result{RequeueAfter: retryShort}, nil
+		}
+		setReady(&conn.Status.Conditions, conn.Generation, false, langfusev1alpha1.ReasonAPIError, err.Error())
+		return ctrl.Result{}, err
+	}
+
+	project, err := lf.GetProject(ctx)
+	switch {
+	case langfuse.IsUnauthorized(err):
+		setReady(&conn.Status.Conditions, conn.Generation, false, langfusev1alpha1.ReasonUnauthorized,
+			"Langfuse rejected the API key; use a project-scoped key pair: "+err.Error())
+		return ctrl.Result{RequeueAfter: retryLong}, nil
+	case err != nil:
+		setReady(&conn.Status.Conditions, conn.Generation, false, langfusev1alpha1.ReasonAPIError, err.Error())
+		return ctrl.Result{}, err
+	}
+
+	conn.Status.ProjectID = project.ID
+	conn.Status.ProjectName = project.Name
+	setReady(&conn.Status.Conditions, conn.Generation, true, langfusev1alpha1.ReasonSynced,
+		fmt.Sprintf("Connected to project %q", project.Name))
+	return ctrl.Result{RequeueAfter: r.resync()}, nil
+}
+
+func (r *LangfuseConnectionReconciler) resync() time.Duration {
+	if r.ResyncPeriod > 0 {
+		return r.ResyncPeriod
+	}
+	return DefaultResyncPeriod
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *LangfuseConnectionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&langfusev1alpha1.LangfuseConnection{}).
+		For(&langfusev1alpha1.LangfuseConnection{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Named("langfuseconnection").
 		Complete(r)
 }

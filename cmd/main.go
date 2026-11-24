@@ -21,6 +21,8 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -30,6 +32,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/certwatcher"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -39,6 +42,7 @@ import (
 
 	langfusev1alpha1 "github.com/virtual-objects/langfuse-operator/api/v1alpha1"
 	"github.com/virtual-objects/langfuse-operator/internal/controller"
+	"github.com/virtual-objects/langfuse-operator/internal/langfuse"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -63,6 +67,8 @@ func main() {
 	var probeAddr string
 	var secureMetrics bool
 	var enableHTTP2 bool
+	var resyncPeriod time.Duration
+	var watchNamespaces string
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -84,6 +90,10 @@ func main() {
 	opts := zap.Options{
 		Development: true,
 	}
+	flag.DurationVar(&resyncPeriod, "resync-period", controller.DefaultResyncPeriod,
+		"How often Ready objects are re-checked against Langfuse to correct drift.")
+	flag.StringVar(&watchNamespaces, "watch-namespaces", os.Getenv("WATCH_NAMESPACES"),
+		"Comma-separated namespaces to watch. Empty watches all namespaces.")
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
 
@@ -178,13 +188,25 @@ func main() {
 		})
 	}
 
+	cacheOpts := cache.Options{}
+	if watchNamespaces != "" {
+		cacheOpts.DefaultNamespaces = map[string]cache.Config{}
+		for _, ns := range strings.Split(watchNamespaces, ",") {
+			if ns = strings.TrimSpace(ns); ns != "" {
+				cacheOpts.DefaultNamespaces[ns] = cache.Config{}
+			}
+		}
+		setupLog.Info("watching namespaces", "namespaces", watchNamespaces)
+	}
+
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                 scheme,
+		Cache:                  cacheOpts,
 		Metrics:                metricsServerOptions,
 		WebhookServer:          webhookServer,
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       "de71d5b7.virtual-objects.github.io",
+		LeaderElectionID:       "langfuse-operator.virtual-objects.github.io",
 		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
 		// when the Manager ends. This requires the binary to immediately end when the
 		// Manager is stopped, otherwise, this setting is unsafe. Setting this significantly
@@ -202,16 +224,20 @@ func main() {
 		os.Exit(1)
 	}
 
+	resolver := &controller.ConnectionResolver{SecretReader: mgr.GetAPIReader()}
 	if err := (&controller.LangfuseConnectionReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:       mgr.GetClient(),
+		Resolver:     resolver,
+		ResyncPeriod: resyncPeriod,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "LangfuseConnection")
 		os.Exit(1)
 	}
 	if err := (&controller.LangfuseModelReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:       mgr.GetClient(),
+		Resolver:     resolver,
+		Recorder:     mgr.GetEventRecorderFor("langfuse-operator"),
+		ResyncPeriod: resyncPeriod,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "LangfuseModel")
 		os.Exit(1)
@@ -243,7 +269,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	setupLog.Info("starting manager")
+	setupLog.Info("starting manager", "version", langfuse.Version)
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
