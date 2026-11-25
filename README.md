@@ -144,6 +144,9 @@ kubectl apply -f config/samples/langfuse_v1alpha1_langfusemodel.yaml
 kubectl get lfconn,lfmodel
 ```
 
+**Day-to-day changes:** follow the
+[runbook for adding or updating model definitions](docs/runbook-model-definitions.md).
+
 Models belong to one Langfuse project. To price the same model in several projects,
 create one connection per project and one `LangfuseModel` per connection; Kustomize
 overlays work well for this.

@@ -73,6 +73,9 @@ spec:
       pricePerMillion: {input: "3.30", output: "16.50", cacheRead: "0.33", cacheWrite: "4.125"}
 ```
 
+Step-by-step instructions for adding, repricing or removing models are in the
+[model definition runbook](runbook-model-definitions.md).
+
 ## Proposed kinds
 
 ### LangfuseScoreConfig: one scoring scheme everywhere

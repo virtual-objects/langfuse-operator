@@ -7,6 +7,11 @@ breaking API changes; they are called out below.
 
 ## [Unreleased]
 
+### Added
+
+- Runbook for adding, repricing and removing model definitions (`docs/runbook-model-definitions.md`).
+- `hack/bedrock-prices.py`: prints Amazon Bedrock token prices from the public AWS price list.
+
 ## [0.1.0]
 
 ### Added
