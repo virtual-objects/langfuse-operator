@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">langfuse-operator</title>
+  <desc id="desc">A rounded heptagon containing a trace waterfall whose last span is a price tag.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2B3CC9"/>
+      <stop offset="1" stop-color="#141B5C"/>
+    </linearGradient>
+    <linearGradient id="tag" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#FCD34D"/>
+      <stop offset="1" stop-color="#F59E0B"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Heptagon: a nod to Kubernetes, rounded with a thick round-joined stroke -->
+  <polygon points="128,22 210.8,61.9 231.3,151.4 174,223.3 82,223.3 24.7,151.4 45.2,61.9"
+           fill="url(#bg)" stroke="url(#bg)" stroke-width="18" stroke-linejoin="round"/>
+
+  <g transform="translate(0 6)">
+  <!-- Trace tree connectors -->
+  <path d="M70 92 V171 M70 128 H92 M70 171 H112" fill="none" stroke="#A5B4FC"
+        stroke-width="5" stroke-linecap="round" stroke-opacity="0.7"/>
+  <circle cx="70" cy="92" r="7" fill="#E0E7FF"/>
+
+  <!-- Spans -->
+  <rect x="84" y="80" width="112" height="24" rx="12" fill="#93C5FD"/>
+  <rect x="100" y="116" width="84" height="24" rx="12" fill="#5EEAD4"/>
+
+  <!-- Last span is a price tag: the model's pricing -->
+  <path d="M112 159 H171 L189 171 L171 183 H112 a12 12 0 0 1 0 -24 Z" fill="url(#tag)"/>
+  <circle cx="171" cy="171" r="4" fill="#141B5C"/>
+  </g>
+</svg>

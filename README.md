@@ -1,4 +1,10 @@
-# langfuse-operator
+<p align="center">
+  <img src="docs/assets/logo.svg" alt="langfuse-operator logo" width="140">
+</p>
+
+<h1 align="center">langfuse-operator</h1>
+
+<p align="center"><b>Langfuse configuration as code, for Kubernetes.</b></p>
 
 A Kubernetes operator that manages [Langfuse](https://langfuse.com) configuration as
 custom resources. It works with any self-hosted Langfuse v3 deployment, including the
@@ -171,12 +177,21 @@ Report vulnerabilities privately; see [SECURITY.md](SECURITY.md).
 
 Langfuse Cloud exposes the same public API and should work, but it is not tested yet.
 
-## Roadmap
+## Roadmap: Langfuse as code
 
 `LangfuseConnection` and the shared reconcile helpers are built so more Langfuse
-resources can be added with little code. Candidates: score configs, prompts, and
-LLM-as-a-judge evaluators. See [docs/extending.md](docs/extending.md). Ideas and pull
-requests are welcome.
+resources can be added with little code. [docs/automation.md](docs/automation.md)
+shows the YAML for the proposed kinds, which Langfuse API each one uses, and a GitOps
+layout for many environments:
+
+| Kind | Status |
+|---|---|
+| `LangfuseConnection`, `LangfuseModel` | Available |
+| `LangfuseScoreConfig`, `LangfusePrompt`, `LangfuseLLMConnection`, `LangfuseDataset` | Proposed |
+| `LangfuseAnnotationQueue`, `LangfuseEvaluator` | Later |
+
+To build one, follow [docs/extending.md](docs/extending.md). Ideas and pull requests
+are welcome.
 
 ## Contributing
 

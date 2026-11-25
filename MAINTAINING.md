@@ -22,6 +22,7 @@ running an open-source project.
 5. After the first release, open **Packages → langfuse-operator → Package settings**
    and set visibility to **Public** (also for `charts/langfuse-operator`).
 6. Add topics: `kubernetes`, `operator`, `langfuse`, `llm`, `observability`.
+7. **Settings → General → Social preview**: upload `docs/assets/logo-512.png`.
 
 ## Handling issues
 
