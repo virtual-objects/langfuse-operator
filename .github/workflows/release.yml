@@ -62,7 +62,7 @@ jobs:
         run: cosign sign --yes "${IMAGE}@${{ steps.build.outputs.digest }}"
 
       - name: Build install.yaml
-        run: make build-installer IMG=${IMAGE}:${{ steps.v.outputs.tag }}
+        run: make build-installer IMG="${IMAGE}:${{ steps.v.outputs.tag }}"
 
       - uses: azure/setup-helm@v5
       - name: Package and push Helm chart
@@ -75,8 +75,9 @@ jobs:
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.v.outputs.tag }}
+          CHART: ${{ steps.v.outputs.chart }}
         run: |
-          gh release create "${{ steps.v.outputs.tag }}" \
-            dist/install.yaml dist/langfuse-operator-${{ steps.v.outputs.chart }}.tgz \
-            --title "${{ steps.v.outputs.tag }}" --generate-notes \
-            $([[ "${{ steps.v.outputs.tag }}" == *-* ]] && echo --prerelease)
+          args=(--title "$TAG" --generate-notes)
+          if [[ "$TAG" == *-* ]]; then args+=(--prerelease); fi
+          gh release create "$TAG" dist/install.yaml "dist/langfuse-operator-${CHART}.tgz" "${args[@]}"
