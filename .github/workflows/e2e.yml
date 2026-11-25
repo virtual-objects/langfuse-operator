@@ -1,0 +1,35 @@
+name: E2E
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    name: Langfuse ${{ matrix.langfuse }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        # Oldest supported release and the latest v3.
+        langfuse: ["3.139", "3"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Install kind
+        run: go install sigs.k8s.io/kind@v0.33.0
+
+      - name: Run e2e against a real Langfuse
+        run: make test-e2e-langfuse LANGFUSE_VERSION=${{ matrix.langfuse }}

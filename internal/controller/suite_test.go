@@ -105,7 +105,7 @@ var _ = BeforeSuite(func() {
 	}).SetupWithManager(mgr)).To(Succeed())
 	Expect((&LangfuseModelReconciler{
 		Client: mgr.GetClient(), Resolver: resolver, ResyncPeriod: testResync,
-		Recorder: mgr.GetEventRecorderFor("langfuse-operator"),
+		Recorder: mgr.GetEventRecorder("langfuse-operator"),
 	}).SetupWithManager(mgr)).To(Succeed())
 	go func() {
 		defer GinkgoRecover()

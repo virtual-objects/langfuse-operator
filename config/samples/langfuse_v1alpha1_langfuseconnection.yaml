@@ -1,9 +1,22 @@
+# A project-scoped Langfuse API key pair. Create it in the Langfuse UI
+# (Project Settings -> API Keys) and store it in a Secret, for example with
+# External Secrets Operator (see externalsecret.yaml in this directory).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: langfuse-project-keys
+type: Opaque
+stringData:
+  public_key: pk-lf-REPLACE_ME
+  secret_key: sk-lf-REPLACE_ME
+---
 apiVersion: langfuse.virtual-objects.github.io/v1alpha1
 kind: LangfuseConnection
 metadata:
-  labels:
-    app.kubernetes.io/name: langfuse-operator
-    app.kubernetes.io/managed-by: kustomize
-  name: langfuseconnection-sample
+  name: my-project
 spec:
-  # TODO(user): Add fields here
+  host: http://langfuse-web.langfuse.svc.cluster.local:3000
+  apiKeySecretRef:
+    name: langfuse-project-keys
+    # publicKeyKey: public_key   # default
+    # secretKeyKey: secret_key   # default

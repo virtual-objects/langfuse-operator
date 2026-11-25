@@ -1,0 +1,14 @@
+apiVersion: v2
+name: langfuse-operator
+description: Kubernetes operator that manages Langfuse model definitions and pricing as custom resources
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/virtual-objects/langfuse-operator
+sources:
+  - https://github.com/virtual-objects/langfuse-operator
+keywords:
+  - langfuse
+  - llm
+  - observability
+  - operator

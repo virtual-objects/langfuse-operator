@@ -101,5 +101,5 @@ type LangfuseConnectionList struct {
 }
 
 func init() {
-	SchemeBuilder.Register(&LangfuseConnection{}, &LangfuseConnectionList{})
+	register(&LangfuseConnection{}, &LangfuseConnectionList{})
 }

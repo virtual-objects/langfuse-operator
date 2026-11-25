@@ -203,5 +203,5 @@ type LangfuseModelList struct {
 }
 
 func init() {
-	SchemeBuilder.Register(&LangfuseModel{}, &LangfuseModelList{})
+	register(&LangfuseModel{}, &LangfuseModelList{})
 }

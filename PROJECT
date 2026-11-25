@@ -6,6 +6,8 @@ cliVersion: 4.6.0
 domain: virtual-objects.github.io
 layout:
 - go.kubebuilder.io/v4
+plugins:
+  helm.kubebuilder.io/v1-alpha: {}
 projectName: langfuse-operator
 repo: github.com/virtual-objects/langfuse-operator
 resources:

@@ -17,8 +17,11 @@ limitations under the License.
 package controller
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -28,8 +31,10 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
+	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1 "github.com/virtual-objects/langfuse-operator/api/v1alpha1"
@@ -272,8 +277,9 @@ var _ = Describe("LangfuseModel", func() {
 		m.Spec.ModelName = "new-name"
 		Expect(k8sClient.Update(ctx, &m)).To(Succeed())
 		Eventually(func() []string {
-			var names []string
-			for _, lm := range e.projectModels() {
+			models := e.projectModels()
+			names := make([]string, 0, len(models))
+			for _, lm := range models {
 				names = append(names, lm.ModelName)
 			}
 			return names
@@ -386,6 +392,31 @@ var _ = Describe("LangfuseModel", func() {
 		Expect(reqs).NotTo(BeEmpty())
 		for _, r := range reqs {
 			Expect(r.XFrom).To(Equal(langfuse.ClientName), fmt.Sprintf("%s %s", r.Method, r.Path))
+		}
+	})
+})
+
+var _ = Describe("Samples", func() {
+	It("are accepted by the API server", func() {
+		e := newEnv(false)
+		files, err := filepath.Glob(filepath.Join("..", "..", "config", "samples", "langfuse_*.yaml"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(files).NotTo(BeEmpty())
+		for _, f := range files {
+			raw, err := os.ReadFile(f)
+			Expect(err).NotTo(HaveOccurred())
+			dec := utilyaml.NewYAMLOrJSONDecoder(bytes.NewReader(raw), 4096)
+			for {
+				var u unstructured.Unstructured
+				if err := dec.Decode(&u.Object); err != nil {
+					break
+				}
+				if len(u.Object) == 0 {
+					continue
+				}
+				u.SetNamespace(e.ns)
+				Expect(k8sClient.Create(ctx, &u, client.DryRunAll)).To(Succeed(), "%s: %s", f, u.GetName())
+			}
 		}
 	})
 })

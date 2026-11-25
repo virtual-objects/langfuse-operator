@@ -236,7 +236,7 @@ func main() {
 	if err := (&controller.LangfuseModelReconciler{
 		Client:       mgr.GetClient(),
 		Resolver:     resolver,
-		Recorder:     mgr.GetEventRecorderFor("langfuse-operator"),
+		Recorder:     mgr.GetEventRecorder("langfuse-operator"),
 		ResyncPeriod: resyncPeriod,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "LangfuseModel")

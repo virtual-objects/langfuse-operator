@@ -1,0 +1,23 @@
+# A model with a second pricing tier that applies above 200k input tokens,
+# plus a custom usage type passed through as-is.
+apiVersion: langfuse.virtual-objects.github.io/v1alpha1
+kind: LangfuseModel
+metadata:
+  name: internal-llm
+spec:
+  connectionRef:
+    name: my-project
+  modelName: internal-llm
+  matchPattern: '(?i)^internal-llm(-\d{8})?$'
+  pricingTiers:
+    - name: Standard
+      isDefault: true
+      pricePerMillion: {input: "1", output: "4", reasoning_tokens: "4"}
+    - name: Large context
+      priority: 1
+      conditions:
+        - usageDetailPattern: input
+          operator: gt
+          value: 200000
+      pricePerMillion: {input: "2", output: "6", reasoning_tokens: "6"}
+  deletionPolicy: Orphan

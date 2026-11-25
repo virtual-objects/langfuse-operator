@@ -1,9 +1,21 @@
+# Claude Sonnet 4.6 through Amazon Bedrock regional (geo) inference profiles,
+# which AWS prices 10% above the global profile.
 apiVersion: langfuse.virtual-objects.github.io/v1alpha1
 kind: LangfuseModel
 metadata:
-  labels:
-    app.kubernetes.io/name: langfuse-operator
-    app.kubernetes.io/managed-by: kustomize
-  name: langfusemodel-sample
+  name: claude-sonnet-4-6-bedrock-geo
 spec:
-  # TODO(user): Add fields here
+  connectionRef:
+    name: my-project
+  modelName: claude-sonnet-4-6-bedrock-geo
+  matchPattern: '(?i)^(us|eu|apac|au|jp)\.anthropic\.claude-sonnet-4-6(-v\d+:\d+)?$'
+  unit: TOKENS
+  tokenizerId: claude
+  pricingTiers:
+    - name: Standard
+      isDefault: true
+      pricePerMillion:
+        input: "3.30"
+        output: "16.50"
+        cacheRead: "0.33"
+        cacheWrite: "4.125"

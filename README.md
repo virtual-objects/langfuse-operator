@@ -1,135 +1,194 @@
 # langfuse-operator
-// TODO(user): Add simple overview of use/purpose
 
-## Description
-// TODO(user): An in-depth paragraph about your project and overview of use
+A Kubernetes operator that manages [Langfuse](https://langfuse.com) configuration as
+custom resources. It works with any self-hosted Langfuse v3 deployment, including the
+official Helm chart. All it needs is a project API key.
 
-## Getting Started
+The first resource is **`LangfuseModel`**: model definitions and pricing, kept in Git
+and applied to Langfuse automatically. Generations whose model has no definition
+show **$0 cost** in Langfuse. This operator closes that gap for:
 
-### Prerequisites
-- go version v1.24.0+
-- docker version 17.03+.
-- kubectl version v1.11.3+.
-- Access to a Kubernetes v1.11.3+ cluster.
+- models Langfuse has not added yet, or added in a release you have not upgraded to;
+- provider-specific IDs and prices, e.g. Amazon Bedrock regional (`us.`, `eu.`, `apac.`)
+  inference profiles, which cost 10% more than the global profile;
+- internal, fine-tuned or self-hosted models, and negotiated prices.
 
-### To Deploy on the cluster
-**Build and push your image to the location specified by `IMG`:**
-
-```sh
-make docker-build docker-push IMG=<some-registry>/langfuse-operator:tag
+```yaml
+apiVersion: langfuse.virtual-objects.github.io/v1alpha1
+kind: LangfuseModel
+metadata:
+  name: claude-sonnet-4-6-bedrock-geo
+spec:
+  connectionRef: {name: my-project}
+  modelName: claude-sonnet-4-6-bedrock-geo
+  matchPattern: '(?i)^(us|eu|apac|au|jp)\.anthropic\.claude-sonnet-4-6(-v\d+:\d+)?$'
+  tokenizerId: claude
+  pricingTiers:
+    - name: Standard
+      isDefault: true
+      pricePerMillion: {input: "3.30", output: "16.50", cacheRead: "0.33", cacheWrite: "4.125"}
 ```
 
-**NOTE:** This image ought to be published in the personal registry you specified.
-And it is required to have access to pull the image from the working environment.
-Make sure you have the proper permission to the registry if the above commands don’t work.
-
-**Install the CRDs into the cluster:**
-
-```sh
-make install
+```console
+$ kubectl get lfmodel
+NAME                            MODEL                           CONNECTION   READY   AGE
+claude-sonnet-4-6-bedrock-geo   claude-sonnet-4-6-bedrock-geo   my-project   True    2m
 ```
 
-**Deploy the Manager to the cluster with the image specified by `IMG`:**
+## How it works
 
-```sh
-make deploy IMG=<some-registry>/langfuse-operator:tag
+```mermaid
+flowchart LR
+  ES[External Secrets / any Secret] --> S[(Secret: project API key)]
+  S --> C[LangfuseConnection]
+  C --> M1[LangfuseModel]
+  C --> M2[LangfuseModel]
+  M1 & M2 -- "/api/public/models" --> LF[(Langfuse project)]
 ```
 
-> **NOTE**: If you encounter RBAC errors, you may need to grant yourself cluster-admin
-privileges or be logged in as admin.
+- **`LangfuseConnection`** is a host plus a Secret holding a project-scoped API key pair
+  (`public_key`, `secret_key`). The operator checks the key and records the project.
+  The Secret can come from anywhere, for example External Secrets Operator.
+- **`LangfuseModel`** points at a connection in the same namespace. The operator creates
+  the model through Langfuse's public API. Langfuse clears its model-match cache on
+  every change, so new prices apply to new generations right away.
 
-**Create instances of your solution**
-You can apply the samples (examples) from the config/sample:
+The operator uses only project-scoped public API endpoints, so it does **not** need a
+Langfuse Enterprise license, an organization key, or database access.
 
-```sh
-kubectl apply -k config/samples/
-```
+### Reconciliation behaviour
 
->**NOTE**: Ensure that the samples has default values to test it out.
+| Situation | What the operator does |
+|---|---|
+| Model missing in Langfuse | Creates it. |
+| A project model with the same `modelName` exists (e.g. made by hand) | Adopts it, then fixes any differences. |
+| Spec changed, or someone edited/deleted the model in Langfuse | Detects the drift on the next resync (default 10 min) or immediately on a spec change. Langfuse v3 has no update endpoint, so the model is deleted and created again. Costs of already-ingested generations are not changed. |
+| `modelName` changed | Deletes the model stored under the old name. |
+| A built-in Langfuse model has the same name | Leaves it alone. The project model takes precedence in Langfuse. |
+| Two `LangfuseModel`s manage the same `modelName` through the same connection | The older one wins; the newer one reports `Conflict`. |
+| Resource deleted | Deletes the Langfuse model (`deletionPolicy: Delete`, the default) or keeps it (`Orphan`). If the connection is already gone, deletion is not blocked. |
 
-### To Uninstall
-**Delete the instances (CRs) from the cluster:**
+Progress is reported in the `Ready` condition (`Synced`, `InvalidSpec`, `Rejected`,
+`Unauthorized`, `SecretNotFound`, `ConnectionNotReady`, `Conflict`, `APIError`) and in
+Kubernetes events (`kubectl describe lfmodel <name>`).
 
-```sh
-kubectl delete -k config/samples/
-```
+## Pricing
 
-**Delete the APIs(CRDs) from the cluster:**
+Prices are decimal strings in USD, so values like `0.33` are never rounded through a
+float. Set them per million units (`pricePerMillion`) or per unit (`pricePerUnit`).
 
-```sh
-make uninstall
-```
+Keys are either **aliases** or **literal Langfuse usage types**. An alias expands to
+every usage-type name that Langfuse and its SDKs report:
 
-**UnDeploy the controller from the cluster:**
+| Alias | Usage types |
+|---|---|
+| `input` | `input`, `input_tokens` |
+| `output` | `output`, `output_tokens` |
+| `cacheRead` | `input_cache_read`, `cache_read_input_tokens` |
+| `cacheWrite` | `input_cache_creation`, `cache_creation_input_tokens` |
+| `total` | `total` |
 
-```sh
-make undeploy
-```
+Any other key, e.g. `reasoning_tokens`, is passed through unchanged. Precedence, last
+wins: `pricePerMillion` aliases, `pricePerMillion` literals, `pricePerUnit` aliases,
+`pricePerUnit` literals.
 
-## Project Distribution
+Pricing tiers follow Langfuse's rules, enforced when you apply the resource:
 
-Following the options to release and provide this solution to the users.
+- exactly one default tier (`isDefault: true`), with priority 0 and no conditions;
+- every other tier has at least one condition;
+- tier names and priorities are unique;
+- every tier prices the same usage types.
 
-### By providing a bundle with all YAML files
+See [`config/samples`](config/samples) for a tiered example.
 
-1. Build the installer for the image built and published in the registry:
+## Install
 
-```sh
-make build-installer IMG=<some-registry>/langfuse-operator:tag
-```
-
-**NOTE:** The makefile target mentioned above generates an 'install.yaml'
-file in the dist directory. This file contains all the resources built
-with Kustomize, which are necessary to install this project without its
-dependencies.
-
-2. Using the installer
-
-Users can just run 'kubectl apply -f <URL for YAML BUNDLE>' to install
-the project, i.e.:
-
-```sh
-kubectl apply -f https://raw.githubusercontent.com/<org>/langfuse-operator/<tag or branch>/dist/install.yaml
-```
-
-### By providing a Helm Chart
-
-1. Build the chart using the optional helm plugin
+**Helm** (from the GitHub Container Registry):
 
 ```sh
-kubebuilder edit --plugins=helm/v1-alpha
+helm install langfuse-operator oci://ghcr.io/virtual-objects/charts/langfuse-operator \
+  --version 0.1.0 --namespace langfuse-operator-system --create-namespace
 ```
 
-2. See that a chart was generated under 'dist/chart', and users
-can obtain this solution from there.
+**Plain manifests:**
 
-**NOTE:** If you change the project, you need to update the Helm Chart
-using the same command above to sync the latest changes. Furthermore,
-if you create webhooks, you need to use the above command with
-the '--force' flag and manually ensure that any custom configuration
-previously added to 'dist/chart/values.yaml' or 'dist/chart/manager/manager.yaml'
-is manually re-applied afterwards.
+```sh
+kubectl apply -f https://github.com/virtual-objects/langfuse-operator/releases/download/v0.1.0/install.yaml
+```
+
+Release images are multi-arch (amd64/arm64) and signed with
+[cosign](https://github.com/sigstore/cosign) keyless signing:
+
+```sh
+cosign verify ghcr.io/virtual-objects/langfuse-operator:v0.1.0 \
+  --certificate-identity-regexp 'https://github.com/virtual-objects/langfuse-operator/.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+### Quick start
+
+1. In Langfuse, open **Project Settings → API Keys** and create a key pair.
+2. Store it in a Secret with keys `public_key` and `secret_key`. Create it directly, or
+   with External Secrets Operator ([example](config/samples/externalsecret.yaml)).
+3. Apply a connection and a model:
+
+```sh
+kubectl apply -f config/samples/langfuse_v1alpha1_langfuseconnection.yaml   # edit host and keys first
+kubectl apply -f config/samples/langfuse_v1alpha1_langfusemodel.yaml
+kubectl get lfconn,lfmodel
+```
+
+Models belong to one Langfuse project. To price the same model in several projects,
+create one connection per project and one `LangfuseModel` per connection; Kustomize
+overlays work well for this.
+
+### Operator flags
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--resync-period` | `10m` | How often Ready objects are re-checked against Langfuse. |
+| `--watch-namespaces` (env `WATCH_NAMESPACES`) | all | Comma-separated namespaces to watch. |
+| `--leader-elect` | `false` (`true` in the shipped manifests) | Run several replicas safely. |
+
+## Security
+
+- **Secrets:** the operator needs only `get` on Secrets, not `list` or `watch`, and
+  reads them without caching. A changed key is picked up on the next resync.
+- **Namespaces:** `connectionRef` and `apiKeySecretRef` are same-namespace only, so a
+  namespace can never use another namespace's credentials.
+- **Data sent to Langfuse:** only model definitions. Secret values are never logged.
+- **Requests:** every call carries `X-From: langfuse-operator` and a versioned
+  `User-Agent`, so it can be identified in Langfuse logs.
+
+Report vulnerabilities privately; see [SECURITY.md](SECURITY.md).
+
+## Compatibility
+
+| Component | Tested |
+|---|---|
+| Langfuse | 3.139 and the latest 3.x (3.227), in CI on every change |
+| Kubernetes | 1.37 (envtest) and kind's default node image |
+
+Langfuse Cloud exposes the same public API and should work, but it is not tested yet.
+
+## Roadmap
+
+`LangfuseConnection` and the shared reconcile helpers are built so more Langfuse
+resources can be added with little code. Candidates: score configs, prompts, and
+LLM-as-a-judge evaluators. See [docs/extending.md](docs/extending.md). Ideas and pull
+requests are welcome.
 
 ## Contributing
-// TODO(user): Add detailed information on how you would like others to contribute to this project
 
-**NOTE:** Run `make help` for more information on all potential `make` targets
+See [CONTRIBUTING.md](CONTRIBUTING.md). Everyday commands:
 
-More information can be found via the [Kubebuilder Documentation](https://book.kubebuilder.io/introduction.html)
+```sh
+make test                                            # unit + envtest (fake Langfuse)
+make lint
+make test-e2e-langfuse LANGFUSE_VERSION=3.139        # kind + a real Langfuse in Docker
+```
 
 ## License
 
-Copyright 2026 The langfuse-operator Authors.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-
+[Apache License 2.0](LICENSE). Langfuse is a trademark of Langfuse GmbH. This project
+is not affiliated with or endorsed by Langfuse.

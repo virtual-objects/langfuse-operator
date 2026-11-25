@@ -26,7 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -54,14 +54,14 @@ func modelIdentity(m *langfusev1alpha1.LangfuseModel) string {
 type LangfuseModelReconciler struct {
 	client.Client
 	Resolver     *ConnectionResolver
-	Recorder     record.EventRecorder
+	Recorder     events.EventRecorder
 	ResyncPeriod time.Duration
 }
 
 // +kubebuilder:rbac:groups=langfuse.virtual-objects.github.io,resources=langfusemodels,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=langfuse.virtual-objects.github.io,resources=langfusemodels/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=langfuse.virtual-objects.github.io,resources=langfusemodels/finalizers,verbs=update
-// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 
 // Reconcile creates, recreates or deletes the model in Langfuse.
 func (r *LangfuseModelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -88,6 +88,11 @@ func (r *LangfuseModelReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		}
 	}
 	return result, reconcileErr
+}
+
+// event records a Kubernetes event; the reason doubles as the action.
+func (r *LangfuseModelReconciler) event(m *langfusev1alpha1.LangfuseModel, eventType, reason, note string, args ...any) {
+	r.Recorder.Eventf(m, nil, eventType, reason, reason, note, args...)
 }
 
 func (r *LangfuseModelReconciler) notReady(m *langfusev1alpha1.LangfuseModel, reason, msg string) {
@@ -118,7 +123,7 @@ func (r *LangfuseModelReconciler) sync(ctx context.Context, m *langfusev1alpha1.
 
 	// The connection now points at another project: the old model is out of reach.
 	if m.Status.ProjectID != "" && m.Status.ProjectID != conn.Status.ProjectID {
-		r.Recorder.Eventf(m, corev1.EventTypeWarning, "ProjectChanged",
+		r.event(m, corev1.EventTypeWarning, "ProjectChanged",
 			"Connection now targets project %s; model %s in project %s is no longer managed",
 			conn.Status.ProjectID, m.Status.ModelID, m.Status.ProjectID)
 		m.Status.ModelID = ""
@@ -146,7 +151,7 @@ func (r *LangfuseModelReconciler) sync(ctx context.Context, m *langfusev1alpha1.
 		}
 		m.Status.ModelID = ""
 		action = "Recreated"
-		r.Recorder.Eventf(m, corev1.EventTypeNormal, "Deleted", "Deleted model %s to apply change: %s", existing.ID, diff)
+		r.event(m, corev1.EventTypeNormal, "Deleted", "Deleted model %s to apply change: %s", existing.ID, diff)
 	}
 
 	created, err := lf.CreateModel(ctx, want)
@@ -157,7 +162,7 @@ func (r *LangfuseModelReconciler) sync(ctx context.Context, m *langfusev1alpha1.
 		action = "Created"
 	}
 	m.Status.ModelID = created.ID
-	r.Recorder.Eventf(m, corev1.EventTypeNormal, action, "%s model %s (%s) in project %q",
+	r.event(m, corev1.EventTypeNormal, action, "%s model %s (%s) in project %q",
 		action, created.ID, created.ModelName, conn.Status.ProjectName)
 	setReady(&m.Status.Conditions, m.Generation, true, langfusev1alpha1.ReasonSynced,
 		fmt.Sprintf("Model %s is up to date in project %q", created.ID, conn.Status.ProjectName))
@@ -213,7 +218,7 @@ func (r *LangfuseModelReconciler) findExisting(ctx context.Context, lf *langfuse
 			if err := lf.DeleteModel(ctx, id); err != nil && !langfuse.IsNotFound(err) {
 				return nil, err
 			}
-			r.Recorder.Eventf(m, corev1.EventTypeNormal, "Deleted", "Deleted model %s (%s) after rename", id, got.ModelName)
+			r.event(m, corev1.EventTypeNormal, "Deleted", "Deleted model %s (%s) after rename", id, got.ModelName)
 		}
 		m.Status.ModelID = ""
 	}
@@ -224,7 +229,7 @@ func (r *LangfuseModelReconciler) findExisting(ctx context.Context, lf *langfuse
 	}
 	for i := range models {
 		if !models[i].IsLangfuseManaged && models[i].ModelName == name {
-			r.Recorder.Eventf(m, corev1.EventTypeNormal, "Adopted", "Adopted existing model %s (%s)", models[i].ID, name)
+			r.event(m, corev1.EventTypeNormal, "Adopted", "Adopted existing model %s (%s)", models[i].ID, name)
 			return &models[i], nil
 		}
 	}
@@ -239,7 +244,7 @@ func (r *LangfuseModelReconciler) apiFailure(m *langfusev1alpha1.LangfuseModel, 
 		return ctrl.Result{RequeueAfter: retryLong}, nil
 	case langfuse.IsRejected(err):
 		r.notReady(m, langfusev1alpha1.ReasonRejected, err.Error())
-		r.Recorder.Event(m, corev1.EventTypeWarning, "Rejected", truncate(err.Error(), 1024))
+		r.event(m, corev1.EventTypeWarning, "Rejected", "%s", truncate(err.Error(), 1024))
 		return ctrl.Result{RequeueAfter: retryLong}, nil
 	default:
 		r.notReady(m, langfusev1alpha1.ReasonAPIError, err.Error())
@@ -292,7 +297,7 @@ func (r *LangfuseModelReconciler) deleteRemote(ctx context.Context, m *langfusev
 	err := r.Get(ctx, types.NamespacedName{Namespace: m.Namespace, Name: m.Spec.ConnectionRef.Name}, &conn)
 	if apierrors.IsNotFound(err) || (err == nil && !conn.DeletionTimestamp.IsZero()) {
 		// Without a connection the model cannot be reached; do not block deletion.
-		r.Recorder.Eventf(m, corev1.EventTypeWarning, "Orphaned",
+		r.event(m, corev1.EventTypeWarning, "Orphaned",
 			"LangfuseConnection %q is gone; model %s was left in Langfuse", m.Spec.ConnectionRef.Name, m.Status.ModelID)
 		return ctrl.Result{}, true, nil
 	}
@@ -300,7 +305,7 @@ func (r *LangfuseModelReconciler) deleteRemote(ctx context.Context, m *langfusev
 		return ctrl.Result{}, false, err
 	}
 	if conn.Status.ProjectID != "" && m.Status.ProjectID != "" && conn.Status.ProjectID != m.Status.ProjectID {
-		r.Recorder.Eventf(m, corev1.EventTypeWarning, "Orphaned",
+		r.event(m, corev1.EventTypeWarning, "Orphaned",
 			"Connection now targets another project; model %s was left in project %s", m.Status.ModelID, m.Status.ProjectID)
 		return ctrl.Result{}, true, nil
 	}
@@ -308,19 +313,19 @@ func (r *LangfuseModelReconciler) deleteRemote(ctx context.Context, m *langfusev
 	if err != nil {
 		var ce *connectionError
 		if errors.As(err, &ce) {
-			r.Recorder.Eventf(m, corev1.EventTypeWarning, "DeleteBlocked", "Cannot delete model %s: %v", m.Status.ModelID, err)
+			r.event(m, corev1.EventTypeWarning, "DeleteBlocked", "Cannot delete model %s: %v", m.Status.ModelID, err)
 			return ctrl.Result{RequeueAfter: retryShort}, false, nil
 		}
 		return ctrl.Result{}, false, err
 	}
 	if err := lf.DeleteModel(ctx, m.Status.ModelID); err != nil && !langfuse.IsNotFound(err) {
-		r.Recorder.Eventf(m, corev1.EventTypeWarning, "DeleteFailed", "Cannot delete model %s: %v", m.Status.ModelID, err)
+		r.event(m, corev1.EventTypeWarning, "DeleteFailed", "Cannot delete model %s: %v", m.Status.ModelID, err)
 		if langfuse.IsUnauthorized(err) {
 			return ctrl.Result{RequeueAfter: retryLong}, false, nil
 		}
 		return ctrl.Result{}, false, err
 	}
-	r.Recorder.Eventf(m, corev1.EventTypeNormal, "Deleted", "Deleted model %s from Langfuse", m.Status.ModelID)
+	r.event(m, corev1.EventTypeNormal, "Deleted", "Deleted model %s from Langfuse", m.Status.ModelID)
 	return ctrl.Result{}, true, nil
 }
 

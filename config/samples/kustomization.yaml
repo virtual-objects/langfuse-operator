@@ -2,4 +2,5 @@
 resources:
 - langfuse_v1alpha1_langfuseconnection.yaml
 - langfuse_v1alpha1_langfusemodel.yaml
+- langfuse_v1alpha1_langfusemodel_tiered.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

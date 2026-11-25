@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint and verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.15.0
+
+      - name: Generated files and go.mod are up to date
+        run: |
+          go mod tidy
+          make manifests generate
+          git diff --exit-code || { echo "::error::Run 'go mod tidy && make manifests generate' and commit the result"; exit 1; }
+
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  test:
+    name: Unit and envtest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: make test
+        run: make test
+
+  chart:
+    name: Helm chart
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: azure/setup-helm@v5
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: chart-test
+      - name: Lint chart
+        run: helm lint dist/chart
+      - name: Install chart with a locally built image
+        run: |
+          make docker-build IMG=langfuse-operator:ci
+          kind load docker-image langfuse-operator:ci --name chart-test
+          helm install langfuse-operator dist/chart \
+            --namespace langfuse-operator-system --create-namespace \
+            --set controllerManager.container.image.repository=langfuse-operator \
+            --set controllerManager.container.image.tag=ci \
+            --wait --timeout 3m
+          kubectl get crd langfusemodels.langfuse.virtual-objects.github.io langfuseconnections.langfuse.virtual-objects.github.io
