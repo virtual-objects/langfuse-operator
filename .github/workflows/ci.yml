@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+# Build with exactly the toolchain in go.mod, so tools that need a newer Go fail here.
+env:
+  GOTOOLCHAIN: local
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
