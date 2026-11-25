@@ -21,6 +21,7 @@ rules:
   - langfuse.virtual-objects.github.io
   resources:
   - langfuseconnections
+  - langfusecostalerts
   verbs:
   - get
   - list
@@ -29,6 +30,7 @@ rules:
   - langfuse.virtual-objects.github.io
   resources:
   - langfuseconnections/status
+  - langfusecostalerts/status
   - langfusemodels/status
   verbs:
   - get

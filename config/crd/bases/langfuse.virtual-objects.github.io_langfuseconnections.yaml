@@ -93,6 +93,13 @@ spec:
                 maxLength: 2048
                 pattern: ^https?://[^\s/]+(/\S*)?$
                 type: string
+              uiURL:
+                description: |-
+                  UIURL is the browser URL of Langfuse, used for links in notifications,
+                  e.g. https://langfuse.example.com. Defaults to Host.
+                maxLength: 2048
+                pattern: ^https?://[^\s/]+(/\S*)?$
+                type: string
             required:
             - apiKeySecretRef
             - host

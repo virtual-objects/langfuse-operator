@@ -26,16 +26,39 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/virtual-objects/langfuse-operator/internal/langfuse"
 )
 
 type project struct {
 	id, name, secret string
+}
+
+// Trace is an agent run with its generations, for the metrics endpoint.
+type Trace struct {
+	Name        string
+	Environment string
+	Tags        []string
+	Timestamp   time.Time
+	Generations []Generation
+}
+
+// Generation is one LLM call. A nil CostUSD means Langfuse found no price.
+type Generation struct {
+	Model   string
+	Tokens  int64
+	CostUSD *float64
+}
+
+type storedTrace struct {
+	projectID string
+	trace     Trace
 }
 
 // Server is a fake Langfuse. Create one with NewServer and Close it when done.
@@ -47,6 +70,7 @@ type Server struct {
 	models   map[string]*stored // model ID -> model
 	nextID   int
 	requests []Request
+	traces   []storedTrace
 }
 
 type stored struct {
@@ -93,6 +117,26 @@ func (s *Server) insert(projectID string, m langfuse.Model) string {
 	}
 	s.models[m.ID] = &stored{projectID: projectID, model: m}
 	return m.ID
+}
+
+// AddTrace stores a trace for the metrics endpoint.
+func (s *Server) AddTrace(projectID string, t Trace) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.traces = append(s.traces, storedTrace{projectID: projectID, trace: t})
+}
+
+// ClearTraces removes all traces of a project.
+func (s *Server) ClearTraces(projectID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	kept := s.traces[:0]
+	for _, t := range s.traces {
+		if t.projectID != projectID {
+			kept = append(kept, t)
+		}
+	}
+	s.traces = kept
 }
 
 // RemoveModel deletes a model directly, simulating a change made outside the operator.
@@ -177,7 +221,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 
 	switch {
 	case r.URL.Path == "/api/public/projects" && r.Method == http.MethodGet:
-		writeJSON(w, http.StatusOK, map[string]any{"data": []langfuse.Project{{ID: p.id, Name: p.name}}})
+		writeJSON(w, http.StatusOK, map[string]any{dataKey: []langfuse.Project{{ID: p.id, Name: p.name}}})
+	case r.URL.Path == "/api/public/metrics" && r.Method == http.MethodGet:
+		s.metrics(w, r, p)
 	case r.URL.Path == "/api/public/models" && r.Method == http.MethodGet:
 		s.list(w, r, p)
 	case r.URL.Path == "/api/public/models" && r.Method == http.MethodPost:
@@ -238,7 +284,10 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request, p project) {
 	})
 }
 
-const invalidRequest = "Invalid request data"
+const (
+	invalidRequest = "Invalid request data"
+	dataKey        = "data"
+)
 
 var units = map[string]bool{"TOKENS": true, "CHARACTERS": true, "MILLISECONDS": true, "SECONDS": true, "REQUESTS": true, "IMAGES": true}
 
@@ -301,4 +350,156 @@ func validate(in *langfuse.CreateModelRequest) string {
 		return "Exactly one pricing tier must have isDefault: true"
 	}
 	return ""
+}
+
+type metricsQuery struct {
+	View       string                   `json:"view"`
+	Dimensions []struct{ Field string } `json:"dimensions"`
+	Metrics    []struct {
+		Measure     string `json:"measure"`
+		Aggregation string `json:"aggregation"`
+	} `json:"metrics"`
+	Filters []struct {
+		Column   string `json:"column"`
+		Operator string `json:"operator"`
+		Value    any    `json:"value"`
+		Type     string `json:"type"`
+	} `json:"filters"`
+	FromTimestamp time.Time `json:"fromTimestamp"`
+	ToTimestamp   time.Time `json:"toTimestamp"`
+}
+
+type metricsFilter struct {
+	name, env, genType string
+	tags               []string
+	from, to           time.Time
+}
+
+func parseFilter(q *metricsQuery, nameCol string) (*metricsFilter, error) {
+	f := &metricsFilter{from: q.FromTimestamp, to: q.ToTimestamp}
+	for _, c := range q.Filters {
+		switch {
+		case c.Column == nameCol && c.Operator == "=":
+			f.name, _ = c.Value.(string)
+		case c.Column == "environment" && c.Operator == "=":
+			f.env, _ = c.Value.(string)
+		case c.Column == "tags" && c.Operator == "all of":
+			vals, _ := c.Value.([]any)
+			for _, v := range vals {
+				if t, ok := v.(string); ok {
+					f.tags = append(f.tags, t)
+				}
+			}
+		case c.Column == "type" && c.Operator == "=" && nameCol == "traceName":
+			f.genType, _ = c.Value.(string)
+		default:
+			return nil, fmt.Errorf("unsupported filter %s %s", c.Column, c.Operator)
+		}
+	}
+	if f.genType != "" && f.genType != "GENERATION" {
+		return nil, fmt.Errorf("unsupported type filter %s", f.genType)
+	}
+	return f, nil
+}
+
+func (f *metricsFilter) match(t Trace) bool {
+	if (f.name != "" && t.Name != f.name) || (f.env != "" && t.Environment != f.env) ||
+		t.Timestamp.Before(f.from) || !t.Timestamp.Before(f.to) {
+		return false
+	}
+	for _, want := range f.tags {
+		if !slices.Contains(t.Tags, want) {
+			return false
+		}
+	}
+	return true
+}
+
+type agg struct {
+	count, tokens int64
+	cost          float64
+	priced        bool
+}
+
+func (a *agg) add(g Generation) {
+	a.tokens += g.Tokens
+	if g.CostUSD != nil {
+		a.cost += *g.CostUSD
+		a.priced = true
+	}
+}
+
+// costValue mirrors Langfuse: sum of no costs is null.
+func (a *agg) costValue() any {
+	if !a.priced {
+		return nil
+	}
+	return a.cost
+}
+
+// metrics implements the subset of GET /api/public/metrics that the operator
+// uses, returning values in the shapes Langfuse 3.x does: integer aggregates
+// as strings, costs as numbers or null.
+func (s *Server) metrics(w http.ResponseWriter, r *http.Request, p project) {
+	var q metricsQuery
+	if err := json.Unmarshal([]byte(r.URL.Query().Get("query")), &q); err != nil {
+		fail(w, http.StatusBadRequest, "Invalid JSON in query parameter")
+		return
+	}
+	nameCol := map[string]string{"traces": "name", "observations": "traceName"}[q.View]
+	if nameCol == "" {
+		fail(w, http.StatusBadRequest, "unsupported view "+q.View)
+		return
+	}
+	f, err := parseFilter(&q, nameCol)
+	if err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var rows []map[string]any
+	if q.View == "traces" {
+		rows = s.traceRows(p.id, f)
+	} else {
+		rows = s.modelRows(p.id, f)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{dataKey: rows})
+}
+
+func (s *Server) traceRows(projectID string, f *metricsFilter) []map[string]any {
+	var a agg
+	for _, st := range s.traces {
+		if st.projectID != projectID || !f.match(st.trace) {
+			continue
+		}
+		a.count++
+		for _, g := range st.trace.Generations {
+			a.add(g)
+		}
+	}
+	return []map[string]any{{"count_count": strconv.FormatInt(a.count, 10), "sum_totalCost": a.costValue()}}
+}
+
+func (s *Server) modelRows(projectID string, f *metricsFilter) []map[string]any {
+	byModel := map[string]*agg{}
+	var order []string
+	for _, st := range s.traces {
+		if st.projectID != projectID || !f.match(st.trace) {
+			continue
+		}
+		for _, g := range st.trace.Generations {
+			if byModel[g.Model] == nil {
+				byModel[g.Model] = &agg{}
+				order = append(order, g.Model)
+			}
+			byModel[g.Model].add(g)
+		}
+	}
+	rows := make([]map[string]any, 0, len(order))
+	for _, m := range order {
+		a := byModel[m]
+		rows = append(rows, map[string]any{
+			"providedModelName": m, "sum_totalTokens": strconv.FormatInt(a.tokens, 10), "sum_totalCost": a.costValue(),
+		})
+	}
+	return rows
 }

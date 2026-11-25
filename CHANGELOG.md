@@ -9,6 +9,11 @@ breaking API changes; they are called out below.
 
 ### Added
 
+- `LangfuseCostAlert`: Slack alerts for one agent's LLM cost with `budget`, `change`
+  (spike/drop, e.g. week-over-week), `costPerTrace` and `unpricedUsage` rules,
+  repeat/resolved notifications, ingestion delay, and Prometheus metrics.
+- `LangfuseConnection.spec.uiURL` for links in notifications.
+
 - Runbook for adding, repricing and removing model definitions (`docs/runbook-model-definitions.md`).
 - `hack/bedrock-prices.py`: prints Amazon Bedrock token prices from the public AWS price list.
 

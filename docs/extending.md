@@ -12,6 +12,8 @@ pieces to reuse and the rules every kind must follow.
 | `ConnectionResolver` | `internal/controller/common.go` | Turns a connection into an authenticated `*langfuse.Client`. Reads the Secret uncached and classifies failures (`SecretNotFound`, `InvalidSpec`). |
 | `langfuse.Client` | `internal/langfuse/client.go` | HTTP client with auth, `X-From`, error classification (`IsNotFound`, `IsUnauthorized`, `IsRejected`), pagination. Add one method per endpoint. |
 | Fake Langfuse | `internal/langfuse/fake` | In-memory API for unit and envtest tests. Extend it with the endpoints of your kind. |
+| `readyConnection` | `internal/controller/common.go` | Loads a connection and returns a client, or the reason it is not usable yet. |
+| `notify.Sender` | `internal/notify` | Notification channel interface (Slack today); add a channel by implementing `Send`. |
 | `setReady`, `Finalizer`, `DeletionPolicy`, reasons | `internal/controller/common.go`, `api/v1alpha1/common_types.go` | A consistent `Ready` condition and deletion behaviour across kinds. |
 
 ## Steps

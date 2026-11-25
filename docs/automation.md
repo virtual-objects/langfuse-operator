@@ -18,7 +18,7 @@ flowchart LR
   OP -- public API, project key --> P2[(Langfuse project B)]
 ```
 
-> **Status.** `LangfuseConnection` and `LangfuseModel` are available today. The other
+> **Status.** `LangfuseConnection`, `LangfuseModel` and `LangfuseCostAlert` are available today. The other
 > kinds on this page are **proposals** that show how the operator extends. They are
 > not implemented yet; their YAML may change. Comment on or open an issue to shape them.
 
@@ -42,6 +42,7 @@ Each kind is built on the same foundation (see [extending.md](extending.md)):
 |---|---|---|---|
 | `LangfuseConnection` | **Available** | `GET /api/public/projects` | Verifies the key and records the project. |
 | `LangfuseModel` | **Available** | `/api/public/models` | No update endpoint in v3: changes are delete + create. |
+| `LangfuseCostAlert` | **Available** | `/api/public/metrics` (read only) | Slack alerts on budget, spikes/drops, cost per run, unpriced models. See [cost-alerts.md](cost-alerts.md). |
 | `LangfuseScoreConfig` | Proposed | `/api/public/score-configs` (`POST`, `PATCH`) | Cannot be deleted in Langfuse; deletion archives it (`isArchived: true`). |
 | `LangfusePrompt` | Proposed | `/api/public/v2/prompts` | Versions are immutable: a content change creates a new version, then labels such as `production` are moved to it. Delete removes the prompt. |
 | `LangfuseLLMConnection` | Proposed | `/api/public/llm-connections` (`PUT` upsert, `DELETE`) | Provider key comes from a Secret and is never stored in the CR. Used by the playground and LLM-as-a-judge. |

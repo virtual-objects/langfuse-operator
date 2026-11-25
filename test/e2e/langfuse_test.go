@@ -166,7 +166,8 @@ func langfuseScenario() {
 	ts := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
 	genID := fmt.Sprintf("e2e-gen-%d", time.Now().UnixNano())
 	Expect(lfRequest(http.MethodPost, "/api/public/ingestion", map[string]any{"batch": []map[string]any{
-		{"id": genID + "-t", "type": "trace-create", "timestamp": ts, "body": map[string]any{"id": genID + "-trace"}},
+		{"id": genID + "-t", "type": "trace-create", "timestamp": ts,
+			"body": map[string]any{"id": genID + "-trace", "name": "e2e-agent"}},
 		{"id": genID + "-g", "type": "generation-create", "timestamp": ts, "body": map[string]any{
 			"id": genID, "traceId": genID + "-trace", "model": "us.anthropic.claude-sonnet-4-6",
 			"startTime": ts, "endTime": ts,
@@ -202,4 +203,98 @@ func langfuseScenario() {
 	By("deleting the LangfuseModel and seeing the model removed")
 	kubectl("", "-n", demoNamespace, "delete", "lfmodel", "sonnet-geo", "--timeout=60s")
 	Eventually(func() []langfuse.Model { return projectModels(lf) }).Should(BeEmpty())
+
+	costAlertScenario(ts, genID)
+}
+
+// slackMock is a tiny HTTP server that prints every request body, standing in
+// for a Slack incoming webhook.
+const slackMock = `
+apiVersion: v1
+kind: Pod
+metadata: {name: slack-mock, namespace: %[1]s, labels: {app: slack-mock}}
+spec:
+  containers:
+    - name: mock
+      image: python:3.13-alpine
+      command: ["python3", "-u", "-c"]
+      args:
+        - |
+          import http.server
+          class H(http.server.BaseHTTPRequestHandler):
+              def do_POST(self):
+                  body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+                  print("SLACK " + body.decode(), flush=True)
+                  self.send_response(200); self.end_headers(); self.wfile.write(b"ok")
+          http.server.HTTPServer(("", 8080), H).serve_forever()
+      ports: [{containerPort: 8080}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: slack-mock, namespace: %[1]s}
+spec:
+  selector: {app: slack-mock}
+  ports: [{port: 8080}]
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: slack, namespace: %[1]s}
+stringData: {webhook_url: "http://slack-mock.%[1]s.svc:8080/services/T/B/x"}
+`
+
+const e2eCostAlert = `
+apiVersion: langfuse.virtual-objects.github.io/v1alpha1
+kind: LangfuseCostAlert
+metadata: {name: e2e-agent, namespace: %[1]s}
+spec:
+  connectionRef: {name: project}
+  agent: {traceName: e2e-agent}
+  ingestionDelay: 0s
+  rules:
+    - name: budget
+      budget: {window: 1h, maxCostUSD: "1"}
+    - name: unpriced
+      unpricedUsage: {window: 1h}
+  notification:
+    slack:
+      webhookSecretRef: {name: slack}
+`
+
+// costAlertScenario checks that cost alerts evaluate real Langfuse metrics and
+// reach the webhook. The generation priced earlier ($5.05725) breaks the $1
+// budget; an extra generation with an unknown model is reported as unpriced.
+func costAlertScenario(ts, genID string) {
+	By("ingesting a generation for a model Langfuse cannot price")
+	Expect(lfRequest(http.MethodPost, "/api/public/ingestion", map[string]any{"batch": []map[string]any{
+		{"id": genID + "-u", "type": "generation-create", "timestamp": ts, "body": map[string]any{
+			"id": genID + "-unpriced", "traceId": genID + "-trace", "model": "e2e-unpriced-model",
+			"startTime": ts, "endTime": ts, "usageDetails": map[string]int{"input": 1000, "output": 10},
+		}},
+	}}, nil)).To(Succeed())
+
+	By("creating a Slack mock and a LangfuseCostAlert")
+	kubectl(fmt.Sprintf(slackMock, demoNamespace), "apply", "-f", "-")
+	kubectl("", "-n", demoNamespace, "wait", "pod/slack-mock", "--for=condition=Ready", "--timeout=180s")
+	kubectl(fmt.Sprintf(e2eCostAlert, demoNamespace), "apply", "-f", "-")
+	// Data is visible to the metrics API only after ingestion; re-trigger the
+	// evaluation until both rules fire.
+	Eventually(func(g Gomega) {
+		out, err := utils.Run(exec.Command("kubectl", "-n", demoNamespace, "get", "lfcostalert", "e2e-agent",
+			"-o", "jsonpath={.status.firingRules}"))
+		g.Expect(err).NotTo(HaveOccurred())
+		if out != "2" {
+			_, _ = utils.Run(exec.Command("kubectl", "-n", demoNamespace, "patch", "lfcostalert", "e2e-agent",
+				"--type=merge", "-p", fmt.Sprintf(`{"spec":{"interval":"%dm"}}`, 1+time.Now().Second()%50)))
+		}
+		g.Expect(out).To(Equal("2"))
+	}, 4*time.Minute, 10*time.Second).Should(Succeed())
+
+	By("checking the webhook received both alerts")
+	Eventually(func(g Gomega) {
+		logs, err := utils.Run(exec.Command("kubectl", "-n", demoNamespace, "logs", "slack-mock"))
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(logs).To(ContainSubstring("[FIRING] e2e-agent: budget"))
+		g.Expect(logs).To(ContainSubstring("$5.057"))
+		g.Expect(logs).To(ContainSubstring("e2e-unpriced-model"))
+	}).Should(Succeed())
 }

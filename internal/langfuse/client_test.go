@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/virtual-objects/langfuse-operator/internal/langfuse"
 	"github.com/virtual-objects/langfuse-operator/internal/langfuse/fake"
@@ -134,5 +135,51 @@ func TestErrorClassification(t *testing.T) {
 	}
 	if _, err := langfuse.New("http://x", "", "b"); err == nil {
 		t.Fatal("want error for empty key")
+	}
+}
+
+func TestTraceStatsAndModelUsage(t *testing.T) {
+	srv := fake.NewServer()
+	defer srv.Close()
+	srv.AddProject("p1", "proj", "pk", "sk")
+	now := time.Now().UTC()
+	c1, c2 := 0.25, 0.5
+	srv.AddTrace("p1", fake.Trace{Name: "rca", Environment: "prod", Tags: []string{"team:sre", "x"}, Timestamp: now.Add(-time.Minute),
+		Generations: []fake.Generation{{Model: "sonnet", Tokens: 100, CostUSD: &c1}, {Model: "mystery", Tokens: 40}}})
+	srv.AddTrace("p1", fake.Trace{Name: "rca", Environment: "staging", Timestamp: now.Add(-time.Minute),
+		Generations: []fake.Generation{{Model: "sonnet", Tokens: 10, CostUSD: &c2}}})
+	srv.AddTrace("p1", fake.Trace{Name: "chat", Environment: "prod", Timestamp: now.Add(-2 * time.Hour),
+		Generations: []fake.Generation{{Model: "sonnet", Tokens: 10, CostUSD: &c2}}})
+	c := newClient(t, srv, "sk")
+	ctx := context.Background()
+
+	st, err := c.TraceStats(ctx, langfuse.TraceFilter{TraceName: "rca", Environment: "prod", Tags: []string{"team:sre"}},
+		now.Add(-time.Hour), now)
+	if err != nil || st.Traces != 1 || st.CostUSD != 0.25 {
+		t.Fatalf("TraceStats = %+v, %v", st, err)
+	}
+	st, err = c.TraceStats(ctx, langfuse.TraceFilter{TraceName: "nobody"}, now.Add(-time.Hour), now)
+	if err != nil || st.Traces != 0 || st.CostUSD != 0 {
+		t.Fatalf("empty TraceStats = %+v, %v", st, err)
+	}
+	usage, err := c.ModelUsage(ctx, langfuse.TraceFilter{TraceName: "rca", Environment: "prod"}, now.Add(-time.Hour), now)
+	if err != nil || len(usage) != 2 {
+		t.Fatalf("ModelUsage = %+v, %v", usage, err)
+	}
+	for _, u := range usage {
+		if (u.Model == "sonnet") != u.Priced {
+			t.Errorf("priced flag wrong for %+v", u)
+		}
+	}
+}
+
+func TestNumber(t *testing.T) {
+	for in, want := range map[any]float64{float64(1.5): 1.5, "42": 42, json.Number("0.25"): 0.25} {
+		if got, ok := langfuse.Number(in); !ok || got != want {
+			t.Errorf("Number(%v) = %v, %v", in, got, ok)
+		}
+	}
+	if _, ok := langfuse.Number(nil); ok {
+		t.Error("null must not be ok")
 	}
 }

@@ -44,12 +44,13 @@ import (
 // http://onsi.github.io/ginkgo/ to learn more about Ginkgo.
 
 var (
-	ctx       context.Context
-	cancel    context.CancelFunc
-	testEnv   *envtest.Environment
-	cfg       *rest.Config
-	k8sClient client.Client
-	lfServer  *fake.Server
+	ctx         context.Context
+	cancel      context.CancelFunc
+	testEnv     *envtest.Environment
+	cfg         *rest.Config
+	k8sClient   client.Client
+	lfServer    *fake.Server
+	slackServer *slackCapture
 )
 
 // testResync keeps drift-correction tests fast.
@@ -103,6 +104,11 @@ var _ = BeforeSuite(func() {
 	Expect((&LangfuseConnectionReconciler{
 		Client: mgr.GetClient(), Resolver: resolver, ResyncPeriod: testResync,
 	}).SetupWithManager(mgr)).To(Succeed())
+	Expect((&LangfuseCostAlertReconciler{
+		Client: mgr.GetClient(), Resolver: resolver, NotifyRetry: time.Second,
+		Recorder: mgr.GetEventRecorder("langfuse-operator"),
+	}).SetupWithManager(mgr)).To(Succeed())
+	slackServer = newSlackCapture()
 	Expect((&LangfuseModelReconciler{
 		Client: mgr.GetClient(), Resolver: resolver, ResyncPeriod: testResync,
 		Recorder: mgr.GetEventRecorder("langfuse-operator"),
@@ -118,6 +124,9 @@ var _ = AfterSuite(func() {
 	cancel()
 	if lfServer != nil {
 		lfServer.Close()
+	}
+	if slackServer != nil {
+		slackServer.Close()
 	}
 	err := testEnv.Stop()
 	Expect(err).NotTo(HaveOccurred())

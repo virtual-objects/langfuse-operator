@@ -91,6 +91,8 @@ func readyCondition(obj client.Object) *metav1.Condition {
 		return meta.FindStatusCondition(o.Status.Conditions, v1.ConditionReady)
 	case *v1.LangfuseModel:
 		return meta.FindStatusCondition(o.Status.Conditions, v1.ConditionReady)
+	case *v1.LangfuseCostAlert:
+		return meta.FindStatusCondition(o.Status.Conditions, v1.ConditionReady)
 	}
 	return nil
 }

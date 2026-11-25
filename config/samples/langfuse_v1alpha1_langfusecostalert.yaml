@@ -1,0 +1,50 @@
+# Cost alerts for one agent: the traces named "rca-agent" in production.
+# The Slack incoming-webhook URL is a credential; keep it in a Secret (see
+# slack-webhook-externalsecret.yaml for an External Secrets example).
+apiVersion: langfuse.virtual-objects.github.io/v1alpha1
+kind: LangfuseCostAlert
+metadata:
+  name: rca-agent-cost
+spec:
+  connectionRef:
+    name: my-project
+  agent:
+    traceName: rca-agent
+    environment: production
+  interval: 15m          # how often to evaluate
+  ingestionDelay: 5m     # ignore the last 5 minutes, which may still be ingesting
+  rules:
+    # Spend in one hour is over budget.
+    - name: hourly-budget
+      budget:
+        window: 1h
+        maxCostUSD: "25"
+    # Daily spend rose 50% or fell 90% compared with the same day last week.
+    - name: daily-week-over-week
+      change:
+        window: 24h
+        compareOffset: 168h
+        increasePercent: 50
+        decreasePercent: 90
+        minCostUSD: "10"
+    # One agent run got 2x more expensive than in the previous day
+    # (model switch, prompt growth, more tool calls).
+    - name: cost-per-run
+      costPerTrace:
+        window: 6h
+        compareOffset: 24h
+        increasePercent: 100
+        minTraces: 20
+    # Generations used tokens but got no cost: a model definition is missing.
+    - name: unpriced-models
+      unpricedUsage:
+        window: 1h
+        minTokens: 1000
+  notification:
+    slack:
+      webhookSecretRef:
+        name: slack-langfuse-alerts
+        key: webhook_url
+      mentions: ["<!subteam^S0123ABCD>"]   # Slack user group ID; optional
+    repeatInterval: 6h
+    sendResolved: true

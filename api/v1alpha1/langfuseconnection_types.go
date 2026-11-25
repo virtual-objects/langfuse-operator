@@ -45,6 +45,13 @@ type LangfuseConnectionSpec struct {
 	// +kubebuilder:validation:MaxLength=2048
 	Host string `json:"host"`
 
+	// UIURL is the browser URL of Langfuse, used for links in notifications,
+	// e.g. https://langfuse.example.com. Defaults to Host.
+	// +kubebuilder:validation:Pattern=`^https?://[^\s/]+(/\S*)?$`
+	// +kubebuilder:validation:MaxLength=2048
+	// +optional
+	UIURL string `json:"uiURL,omitempty"`
+
 	// APIKeySecretRef points to a Secret with a project-scoped API key pair.
 	// The Secret can be created by any means, for example External Secrets Operator.
 	APIKeySecretRef SecretKeyRef `json:"apiKeySecretRef"`

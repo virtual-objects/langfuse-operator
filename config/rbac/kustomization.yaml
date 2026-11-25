@@ -22,6 +22,9 @@ resources:
 # default, aiding admins in cluster management. Those roles are
 # not used by the langfuse-operator itself. You can comment the following lines
 # if you do not want those helpers be installed with your Project.
+- langfusecostalert_admin_role.yaml
+- langfusecostalert_editor_role.yaml
+- langfusecostalert_viewer_role.yaml
 - langfusemodel_admin_role.yaml
 - langfusemodel_editor_role.yaml
 - langfusemodel_viewer_role.yaml

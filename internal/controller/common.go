@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -130,4 +131,30 @@ func isConnectionReady(conn *langfusev1alpha1.LangfuseConnection) bool {
 	return conn.Status.ProjectID != "" &&
 		conn.Status.ObservedGeneration == conn.Generation &&
 		meta.IsStatusConditionTrue(conn.Status.Conditions, langfusev1alpha1.ConditionReady)
+}
+
+// readyConnection loads a same-namespace LangfuseConnection and returns a client
+// for it. When the connection cannot be used yet, it returns a nil client and a
+// message for the ConnectionNotReady reason; err is only set for API failures.
+func readyConnection(ctx context.Context, c client.Reader, resolver *ConnectionResolver, namespace, name string) (
+	*langfusev1alpha1.LangfuseConnection, *langfuse.Client, string, error) {
+	var conn langfusev1alpha1.LangfuseConnection
+	if err := c.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, &conn); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil, fmt.Sprintf("LangfuseConnection %q not found", name), nil
+		}
+		return nil, nil, "", err
+	}
+	if !isConnectionReady(&conn) {
+		return &conn, nil, fmt.Sprintf("LangfuseConnection %q is not ready", name), nil
+	}
+	lf, err := resolver.Client(ctx, &conn)
+	if err != nil {
+		var ce *connectionError
+		if errors.As(err, &ce) {
+			return &conn, nil, err.Error(), nil
+		}
+		return &conn, nil, "", err
+	}
+	return &conn, lf, "", nil
 }

@@ -4,6 +4,7 @@
 resources:
 - bases/langfuse.virtual-objects.github.io_langfuseconnections.yaml
 - bases/langfuse.virtual-objects.github.io_langfusemodels.yaml
+- bases/langfuse.virtual-objects.github.io_langfusecostalerts.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:

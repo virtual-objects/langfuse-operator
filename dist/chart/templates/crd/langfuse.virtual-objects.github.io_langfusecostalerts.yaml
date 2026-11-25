@@ -1,0 +1,432 @@
+{{- if .Values.crd.enable }}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  labels:
+    {{- include "chart.labels" . | nindent 4 }}
+  annotations:
+    {{- if .Values.crd.keep }}
+    "helm.sh/resource-policy": keep
+    {{- end }}
+    controller-gen.kubebuilder.io/version: v0.23.0
+  name: langfusecostalerts.langfuse.virtual-objects.github.io
+spec:
+  group: langfuse.virtual-objects.github.io
+  names:
+    categories:
+    - langfuse
+    kind: LangfuseCostAlert
+    listKind: LangfuseCostAlertList
+    plural: langfusecostalerts
+    shortNames:
+    - lfcostalert
+    singular: langfusecostalert
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.agent.traceName
+      name: Agent
+      type: string
+    - jsonPath: .status.firingRules
+      name: Firing
+      type: integer
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].reason
+      name: Reason
+      priority: 1
+      type: string
+    - jsonPath: .status.lastEvaluationTime
+      name: Last eval
+      type: date
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          LangfuseCostAlert watches the LLM cost of one agent in a Langfuse project and
+          sends Slack notifications when a rule fires or recovers.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: LangfuseCostAlertSpec defines cost rules for one agent.
+            properties:
+              agent:
+                description: Agent selects the traces to watch.
+                properties:
+                  environment:
+                    description: Environment is the Langfuse environment, e.g. "production".
+                    maxLength: 128
+                    type: string
+                  tags:
+                    description: Tags that every selected trace must carry.
+                    items:
+                      type: string
+                    maxItems: 10
+                    type: array
+                    x-kubernetes-list-type: set
+                  traceName:
+                    description: TraceName is the Langfuse trace name the agent uses,
+                      e.g. "rca-agent".
+                    maxLength: 512
+                    type: string
+                type: object
+              connectionRef:
+                description: ConnectionRef names the LangfuseConnection (same namespace)
+                  for the project.
+                properties:
+                  name:
+                    description: Name of the referenced object.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                required:
+                - name
+                type: object
+              ingestionDelay:
+                default: 5m
+                description: |-
+                  IngestionDelay shifts every window back in time so that data still being
+                  ingested does not look like a drop in cost.
+                type: string
+              interval:
+                default: 15m
+                description: Interval between evaluations.
+                type: string
+              notification:
+                description: Notification target.
+                properties:
+                  repeatInterval:
+                    default: 6h
+                    description: RepeatInterval re-sends a still-firing alert after
+                      this long.
+                    type: string
+                  sendResolved:
+                    default: true
+                    description: SendResolved sends a message when a firing rule recovers.
+                    type: boolean
+                  slack:
+                    description: Slack target.
+                    properties:
+                      mentions:
+                        description: Mentions are added to firing messages, e.g. "<!subteam^S0123ABC>"
+                          or "<@U0123ABC>".
+                        items:
+                          type: string
+                        maxItems: 10
+                        type: array
+                      webhookSecretRef:
+                        description: |-
+                          WebhookSecretRef points to the Secret key that holds the webhook URL
+                          (https://hooks.slack.com/services/...). The URL is a credential: keep it
+                          in a Secret, for example delivered by External Secrets Operator.
+                        properties:
+                          key:
+                            default: webhook_url
+                            description: Key in the Secret.
+                            type: string
+                          name:
+                            description: Name of the Secret.
+                            maxLength: 253
+                            minLength: 1
+                            type: string
+                        required:
+                        - name
+                        type: object
+                    required:
+                    - webhookSecretRef
+                    type: object
+                required:
+                - slack
+                type: object
+              rules:
+                description: Rules to evaluate.
+                items:
+                  description: CostAlertRule is one condition to evaluate. Set exactly
+                    one rule type.
+                  properties:
+                    budget:
+                      description: BudgetRule fires when the agent's cost in the window
+                        exceeds a budget.
+                      properties:
+                        maxCostUSD:
+                          description: MaxCostUSD is the budget for one window.
+                          maxLength: 40
+                          pattern: ^[0-9]+(\.[0-9]+)?$
+                          type: string
+                        window:
+                          description: Window is the period the cost is summed over,
+                            e.g. 1h or 24h.
+                          type: string
+                      required:
+                      - maxCostUSD
+                      - window
+                      type: object
+                    change:
+                      description: |-
+                        ChangeRule fires when the agent's cost in the window moved by more than a
+                        percentage compared with the same-length window CompareOffset earlier.
+                        Use it to catch spikes (increasePercent) and drops such as a stopped agent
+                        (decreasePercent).
+                      properties:
+                        compareOffset:
+                          description: |-
+                            CompareOffset is how far back the comparison window starts. Defaults to
+                            Window (the previous window). Use 168h for week-over-week.
+                          type: string
+                        decreasePercent:
+                          description: DecreasePercent fires when cost fell by at
+                            least this much, e.g. 90.
+                          format: int32
+                          maximum: 100
+                          minimum: 1
+                          type: integer
+                        increasePercent:
+                          description: IncreasePercent fires when cost rose by at
+                            least this much, e.g. 50.
+                          format: int32
+                          minimum: 1
+                          type: integer
+                        minCostUSD:
+                          description: |-
+                            MinCostUSD ignores windows where both values are below this cost, so
+                            small absolute changes do not page anyone.
+                          maxLength: 40
+                          pattern: ^[0-9]+(\.[0-9]+)?$
+                          type: string
+                        window:
+                          description: Window is the period the cost is summed over.
+                          type: string
+                      required:
+                      - window
+                      type: object
+                      x-kubernetes-validations:
+                      - message: set increasePercent, decreasePercent, or both
+                        rule: has(self.increasePercent) || has(self.decreasePercent)
+                    costPerTrace:
+                      description: |-
+                        CostPerTraceRule fires when the average cost of one agent run (trace) rose,
+                        e.g. after a model switch or a growing prompt, even if traffic did not change.
+                      properties:
+                        compareOffset:
+                          description: CompareOffset is how far back the comparison
+                            window starts. Defaults to Window.
+                          type: string
+                        increasePercent:
+                          description: IncreasePercent fires when the average cost
+                            per trace rose by at least this much.
+                          format: int32
+                          minimum: 1
+                          type: integer
+                        minTraces:
+                          default: 10
+                          description: |-
+                            MinTraces is the minimum number of traces in both windows for a
+                            meaningful average.
+                          format: int64
+                          minimum: 1
+                          type: integer
+                        window:
+                          description: Window is the period the average is computed
+                            over.
+                          type: string
+                      required:
+                      - increasePercent
+                      - window
+                      type: object
+                    name:
+                      description: Name identifies the rule in notifications and status.
+                      maxLength: 63
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                      type: string
+                    unpricedUsage:
+                      description: |-
+                        UnpricedUsageRule fires when generations used tokens but got no cost,
+                        usually because no model definition matches their model ID.
+                      properties:
+                        minTokens:
+                          default: 1
+                          description: MinTokens is the number of unpriced tokens
+                            per model that triggers the rule.
+                          format: int64
+                          minimum: 1
+                          type: integer
+                        window:
+                          description: Window is the period to look at.
+                          type: string
+                      required:
+                      - window
+                      type: object
+                  required:
+                  - name
+                  type: object
+                  x-kubernetes-validations:
+                  - message: set exactly one of budget, change, costPerTrace, unpricedUsage
+                    rule: '[has(self.budget), has(self.change), has(self.costPerTrace),
+                      has(self.unpricedUsage)].filter(x, x).size() == 1'
+                maxItems: 20
+                minItems: 1
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
+              suspend:
+                description: Suspend stops evaluation and notifications.
+                type: boolean
+            required:
+            - connectionRef
+            - notification
+            - rules
+            type: object
+          status:
+            description: LangfuseCostAlertStatus defines the observed state of LangfuseCostAlert.
+            properties:
+              conditions:
+                description: Conditions describe the current state.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              firingRules:
+                description: FiringRules is the number of rules currently firing.
+                format: int32
+                type: integer
+              lastEvaluationTime:
+                description: LastEvaluationTime is when the rules were last evaluated.
+                format: date-time
+                type: string
+              observedGeneration:
+                description: ObservedGeneration is the last spec generation that was
+                  evaluated.
+                format: int64
+                type: integer
+              projectID:
+                description: ProjectID of the watched Langfuse project.
+                type: string
+              rules:
+                description: Rules holds the result per rule.
+                items:
+                  description: CostAlertRuleStatus is the last evaluation of one rule.
+                  properties:
+                    baseline:
+                      description: Baseline is the value it was compared with, if
+                        any.
+                      type: string
+                    firingSince:
+                      description: FiringSince is when the rule started firing.
+                      format: date-time
+                      type: string
+                    lastNotified:
+                      description: LastNotified is when a notification for the current
+                        state was last sent.
+                      format: date-time
+                      type: string
+                    message:
+                      description: Message describes the result.
+                      type: string
+                    name:
+                      description: Name of the rule.
+                      type: string
+                    state:
+                      description: State after the last evaluation.
+                      enum:
+                      - OK
+                      - Firing
+                      - NoData
+                      - Error
+                      type: string
+                    value:
+                      description: Value is the measured value (USD, USD per trace,
+                        or unpriced tokens).
+                      type: string
+                  required:
+                  - name
+                  - state
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+{{- end -}}

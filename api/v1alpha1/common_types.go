@@ -50,4 +50,7 @@ const (
 	ReasonAPIError           = "APIError"
 	ReasonConflict           = "Conflict"
 	ReasonRejected           = "Rejected"
+	ReasonEvaluated          = "Evaluated"
+	ReasonSuspended          = "Suspended"
+	ReasonNotificationFailed = "NotificationFailed"
 )

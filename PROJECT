@@ -29,4 +29,13 @@ resources:
   kind: LangfuseModel
   path: github.com/virtual-objects/langfuse-operator/api/v1alpha1
   version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: virtual-objects.github.io
+  group: langfuse
+  kind: LangfuseCostAlert
+  path: github.com/virtual-objects/langfuse-operator/api/v1alpha1
+  version: v1alpha1
 version: "3"

@@ -242,6 +242,14 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "LangfuseModel")
 		os.Exit(1)
 	}
+	if err := (&controller.LangfuseCostAlertReconciler{
+		Client:   mgr.GetClient(),
+		Resolver: resolver,
+		Recorder: mgr.GetEventRecorder("langfuse-operator"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "LangfuseCostAlert")
+		os.Exit(1)
+	}
 	// +kubebuilder:scaffold:builder
 
 	if metricsCertWatcher != nil {

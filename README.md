@@ -10,9 +10,13 @@ A Kubernetes operator that manages [Langfuse](https://langfuse.com) configuratio
 custom resources. It works with any self-hosted Langfuse v3 deployment, including the
 official Helm chart. All it needs is a project API key.
 
-The first resource is **`LangfuseModel`**: model definitions and pricing, kept in Git
-and applied to Langfuse automatically. Generations whose model has no definition
-show **$0 cost** in Langfuse. This operator closes that gap for:
+- **`LangfuseModel`**: model definitions and pricing, kept in Git and applied to
+  Langfuse automatically.
+- **[`LangfuseCostAlert`](#cost-alerts-for-agents)**: Slack alerts when an agent's LLM
+  cost breaks a budget, spikes, drops, gets more expensive per run, or goes unpriced.
+
+Generations whose model has no definition show **$0 cost** in Langfuse.
+`LangfuseModel` closes that gap for:
 
 - models Langfuse has not added yet, or added in a release you have not upgraded to;
 - provider-specific IDs and prices, e.g. Amazon Bedrock regional (`us.`, `eu.`, `apac.`)
@@ -40,6 +44,38 @@ $ kubectl get lfmodel
 NAME                            MODEL                           CONNECTION   READY   AGE
 claude-sonnet-4-6-bedrock-geo   claude-sonnet-4-6-bedrock-geo   my-project   True    2m
 ```
+
+## Cost alerts for agents
+
+**`LangfuseCostAlert`** watches the LLM cost of one agent (a Langfuse trace name,
+optionally narrowed by environment and tags) and posts to Slack when a rule fires and
+when it recovers:
+
+| Rule | Catches |
+|---|---|
+| `budget` | spend in a window above a limit |
+| `change` | spikes or drops compared with an earlier window, e.g. week-over-week |
+| `costPerTrace` | each agent run getting more expensive (model switch, prompt growth) |
+| `unpricedUsage` | generations with tokens but $0 cost because a model definition is missing |
+
+```yaml
+apiVersion: langfuse.virtual-objects.github.io/v1alpha1
+kind: LangfuseCostAlert
+metadata: {name: rca-agent-cost}
+spec:
+  connectionRef: {name: my-project}
+  agent: {traceName: rca-agent, environment: production}
+  rules:
+    - name: hourly-budget
+      budget: {window: 1h, maxCostUSD: "25"}
+    - name: daily-week-over-week
+      change: {window: 24h, compareOffset: 168h, increasePercent: 50, decreasePercent: 90, minCostUSD: "10"}
+  notification:
+    slack:
+      webhookSecretRef: {name: slack-langfuse-alerts}   # webhook URL from a Secret
+```
+
+Details, all options and Prometheus metrics: [docs/cost-alerts.md](docs/cost-alerts.md).
 
 ## How it works
 
@@ -165,7 +201,8 @@ overlays work well for this.
   reads them without caching. A changed key is picked up on the next resync.
 - **Namespaces:** `connectionRef` and `apiKeySecretRef` are same-namespace only, so a
   namespace can never use another namespace's credentials.
-- **Data sent to Langfuse:** only model definitions. Secret values are never logged.
+- **Data sent to Langfuse:** only model definitions; cost alerts only read aggregated
+  metrics. Secret values, including the Slack webhook URL, are never logged.
 - **Requests:** every call carries `X-From: langfuse-operator` and a versioned
   `User-Agent`, so it can be identified in Langfuse logs.
 
@@ -189,7 +226,7 @@ layout for many environments:
 
 | Kind | Status |
 |---|---|
-| `LangfuseConnection`, `LangfuseModel` | Available |
+| `LangfuseConnection`, `LangfuseModel`, `LangfuseCostAlert` | Available |
 | `LangfuseScoreConfig`, `LangfusePrompt`, `LangfuseLLMConnection`, `LangfuseDataset` | Proposed |
 | `LangfuseAnnotationQueue`, `LangfuseEvaluator` | Later |
 
