@@ -39,7 +39,10 @@ make test-e2e-langfuse LANGFUSE_VERSION=3.139
 1. Fork the repository and create a branch from `main`.
 2. If you change `api/`, run `make manifests generate` and commit the generated files.
    If you change RBAC markers or CRDs, also run
-   `kubebuilder edit --plugins=helm/v1-alpha` to refresh the Helm chart.
+   `kubebuilder edit --plugins=helm/v1-alpha` to refresh the Helm chart. That command
+   also re-creates `.github/workflows/test-chart.yml`; delete it again, because the
+   `chart` job in `ci.yml` covers it. Check that `dist/chart/values.yaml` and
+   `Chart.yaml` kept their image and metadata.
 3. Add or update tests. Bug fixes should come with a test that fails without the fix.
 4. Run `make test lint` and make sure they pass.
 5. Update the README or `docs/` for user-visible changes, and add a line under
